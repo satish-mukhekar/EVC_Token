@@ -13,45 +13,61 @@ contract EVC is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     IERC20 RewardToken = IERC20(address(this));
 
     // Fixed Staking
-    uint ID = 1; //initialization of the fix stake ID
+    uint256 ID = 1; //initialization of the fix stake ID
     uint256 public fixPlanCount;
     uint256 public flexplanCount;
 
-    struct unstakeTimeFix {
-        uint unstakeTime0;
-        uint unstakeTime1;
-        uint unstakeTime2;
-    }
-
-    unstakeTimeFix unStakeTimeFix;
-
-    struct infoFix {
-        uint stakeid;
-        uint amount;
-        uint256 depositAttime;
-        uint claimTime;
-        uint planid;
-        uint indexofid;
-        uint unstakeAt;
-    }
-
     struct fixPlan {
-        uint planid;
+        uint256 planid;
         uint256 rewardBal;
-        uint256 maxApyPer;
+        uint256 maxAprPer;
         uint256 currCount;
         uint256 perEVCPrice;
     }
 
-    mapping(address => mapping(uint => infoFix)) public userStakedFix; //addr => id => info
-    mapping(address => uint[]) public stakedIdsFix; //addr => id
+    struct infoFix {
+        uint256 stakeid;
+        uint256 amount;
+        uint256 depositAttime;
+        uint256 claimTime;
+        uint256 planid;
+        uint256 indexofid;
+        uint256 unstakeAt;
+    }
+
+    struct unstakeTimeFix {
+        uint256 unstakeTime0;
+        uint256 unstakeTime1;
+        uint256 unstakeTime2;
+    }
+
+    unstakeTimeFix unStakeTimeFix;
+
+    mapping(address => uint256[]) public stakedIdsFix; //addr => id
     mapping(uint256 => fixPlan) public fixPlans;
-    mapping(address => mapping(uint => uint)) aggregateRewardFix;
+    mapping(address => mapping(uint256 => infoFix)) public userStakedFix; //addr => id => info
+    mapping(address => mapping(uint256 => uint256)) aggregateRewardFix;
 
     // Flexible Staking
-    uint flexid;
+    uint256 flexid;
     uint256 public claimLockFlex = 60; //7 days;
     uint256 public minStakeFlex = 1 * 10 ** decimals();
+
+    struct flexPlan {
+        uint256 planid;
+        uint256 rewardBal;
+        uint256 maxAprPer;
+        uint256 currCount;
+        uint256 perEVCPrice;
+    }
+
+    struct flexUnstakebeforeTime {
+        uint256 id;
+        uint256 flexAmountDeposited;
+        uint256 flexClaimable;
+        uint256 amountDepositedAt;
+        uint256 index;
+    }
 
     struct StakerFlex {
         uint256 flexid;
@@ -64,27 +80,13 @@ contract EVC is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
         bool unstake;
     }
 
-    struct flexPlan {
-        uint256 planid;
-        uint256 rewardBal;
-        uint256 maxApyPer;
-        uint256 currCount;
-        uint256 perEVCPrice;
-    }
+    mapping(address => uint256[]) internal stakedIdsFlex; //address => array of stakeid
+    mapping(address => uint256[]) flexUnstakeBeforeTime; // address => flexUnstakedId
+    mapping(uint256 => flexPlan) public flexplans;
+    mapping(address => mapping(uint256 => StakerFlex)) public userStakedFlex; //addr => id => info
+    mapping(address => mapping(uint256 => flexUnstakebeforeTime)) public flexUnstakeBeforeTimeInfo; // address => id => struct
 
-    struct flexUnstakebeforeTime {
-        uint id;
-        uint flexAmountDeposited;
-        uint flexClaimable;
-        uint amountDepositedAt;
-        uint index;
-    }
-
-    mapping(address => mapping(uint => StakerFlex)) public userStakedFlex; //addr => id => info
-    mapping(address => uint[]) internal stakedIdsFlex; //address => array of stakeid
-    mapping(uint => flexPlan) public flexplans;
-    mapping(address => uint[]) flexUnstakeBeforeTime; // address => flexUnstakedId
-    mapping(address => mapping(uint => flexUnstakebeforeTime)) public flexUnstakeBeforeTimeInfo; // address => id => struct
+    uint256 totalStaked;
 
     //Constructor
     constructor() ERC20("EVCCoin", "EVC") {
@@ -115,6 +117,7 @@ contract EVC is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
         _transfer(msg.sender, address(this), _amount);
         stakedIdsFix[msg.sender].push(ID);
         ID++;
+        totalStaked += _amount;
     }
 
     function claimRewardFix(uint256 id) public {
@@ -138,38 +141,40 @@ contract EVC is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
         uint256 planId = stakedInfo.planid;
         fixPlans[planId].currCount--;
         delete userStakedFix[msg.sender][id];
+        totalStaked -= amount;
     }
 
-    function getRewardFix(address _user, uint id) public view returns(uint) {
-        if (userStakedFix[_user][id].stakeid != id) {
-            return 0;
-        }
-        uint256 apy;
-        uint256 anualReward;
-        uint256 perSecondReward;
-        uint256 stakeSeconds;
-        uint256 reward;
-        apy = getFixApy(userStakedFix[_user][id].planid);
-        anualReward = (fixPlans[userStakedFix[_user][id].planid].perEVCPrice * apy) / 100;
-        perSecondReward = anualReward / (365 * 86400);
-        stakeSeconds = block.timestamp - userStakedFix[_user][id].claimTime;
-        reward = stakeSeconds * perSecondReward;
-        return reward;
-    }
-
-    function getFixApy(uint256 planId) public view returns(uint256) {
+    //View
+    function getFixApr(uint256 planId) public view returns(uint256) {
         require(fixPlans[planId].rewardBal > 0, "Invalid Staking Plan");
         uint256 perEVCShare;
         uint256 stakingBucket = fixPlans[planId].rewardBal;
         uint256 currstakeCount = fixPlans[planId].currCount == 0 ? 1 : fixPlans[planId].currCount; //avoid divisible by 0 error
-        uint256 maxNFTShare = (currstakeCount * fixPlans[planId].perEVCPrice * fixPlans[planId].maxApyPer) / 100;
+        uint256 maxNFTShare = (currstakeCount * fixPlans[planId].perEVCPrice * fixPlans[planId].maxAprPer) / 100;
         if (maxNFTShare < stakingBucket)
             perEVCShare = maxNFTShare / currstakeCount;
         else perEVCShare = stakingBucket / currstakeCount;
         return (perEVCShare * 100) / fixPlans[planId].perEVCPrice;
     }
 
-    function getStakedFixid(address _user) external view returns(uint[] memory) {
+    function getRewardFix(address _user, uint256 id) public view returns(uint256) {
+        if (userStakedFix[_user][id].stakeid != id) {
+            return 0;
+        }
+        uint256 apr;
+        uint256 annualReward;
+        uint256 perSecondReward;
+        uint256 stakeSeconds;
+        uint256 reward;
+        apr = getFixApr(userStakedFix[_user][id].planid);
+        annualReward = (userStakedFix[_user][id].amount * apr) / 100;
+        perSecondReward = annualReward / (365 * 86400);
+        stakeSeconds = block.timestamp - userStakedFix[_user][id].claimTime;
+        reward = stakeSeconds * perSecondReward;
+        return reward;
+    }
+
+    function getStakedFixid(address _user) external view returns(uint256[] memory) {
         return stakedIdsFix[_user];
     }
 
@@ -185,17 +190,17 @@ contract EVC is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     }
 
     //Admin
-    function setFixStakePlan(uint256 id, uint256 _rewardBal, uint256 _maxApyPer, uint256 _perEVCPrice) external onlyOwner {
-        if (fixPlans[id].maxApyPer == 0) {
+    function setFixStakePlan(uint256 id, uint256 _rewardBal, uint256 _maxAprPer, uint256 _perEVCPrice) external onlyOwner {
+        if (fixPlans[id].maxAprPer == 0) {
             fixPlanCount++;
         }
         fixPlans[id].planid = id;
         fixPlans[id].rewardBal = _rewardBal; // Staking reward bucket
-        fixPlans[id].maxApyPer = _maxApyPer;
+        fixPlans[id].maxAprPer = _maxAprPer;
         fixPlans[id].perEVCPrice = _perEVCPrice;
     }
 
-    function setUnstakefixTime(uint _index, uint _newtime) public onlyOwner {
+    function setUnstakefixTime(uint256 _index, uint256 _newtime) public onlyOwner {
         if (_index == 0) {
             unStakeTimeFix.unstakeTime0 = _newtime;
         }
@@ -218,6 +223,7 @@ contract EVC is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
         flexplans[planid].currCount++;
         _transfer(msg.sender, address(this), _amount);
         stakedIdsFlex[msg.sender].push(flexid);
+        totalStaked += _amount;
     }
 
     function claimRewardFlex(uint256 id) public {
@@ -230,6 +236,7 @@ contract EVC is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
             _transfer(address(this), msg.sender, reward);
             userStakedFlex[msg.sender][id].claimable = 0;
             delete flexUnstakeBeforeTimeInfo[msg.sender][id];
+            delete userStakedFlex[msg.sender][id];
             userStakedFlex[msg.sender][id].unstake = true;
             popSlotflexBeforeTime(id);
         } else {
@@ -243,18 +250,19 @@ contract EVC is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
     function unstakeFlex(uint256 id) public nonReentrant {
         require(userStakedFlex[msg.sender][id].flexid == id, "ID not staked by user");
         require(userStakedFlex[msg.sender][id].amountdeposited > 0, "You have no deposit");
+        uint256 deposit = userStakedFlex[msg.sender][id].amountdeposited;
         if (block.timestamp > userStakedFlex[msg.sender][id].depositAttime + claimLockFlex) {
             // For 7 days and above
-            uint256 deposit = userStakedFlex[msg.sender][id].amountdeposited;
             uint256 reward = getRewardFlex(msg.sender, id);
             uint256 totalTransfer = deposit + reward;
             _transfer(address(this), msg.sender, totalTransfer);
             userStakedFlex[msg.sender][id].amountdeposited = 0;
             popSlotflex(id);
+            flexplans[userStakedFlex[msg.sender][id].planid].currCount--;
+            delete userStakedFlex[msg.sender][id];
             userStakedFlex[msg.sender][id].unstake = true;
         } else {
             // Less than 7 days
-            uint256 deposit = userStakedFlex[msg.sender][id].amountdeposited;
             uint256 reward = getRewardFlex(msg.sender, id);
             userStakedFlex[msg.sender][id].claimable = reward;
             _transfer(address(this), msg.sender, deposit);
@@ -263,44 +271,45 @@ contract EVC is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
             flexUnstakeBeforeTime[msg.sender].push(id);
             userStakedFlex[msg.sender][id].amountdeposited = 0;
             popSlotflex(id);
+            flexplans[userStakedFlex[msg.sender][id].planid].currCount--;
         }
-        flexplans[userStakedFlex[msg.sender][id].planid].currCount--;
+        totalStaked -= deposit;
     }
 
     //View
-    function getRewardFlex(address _user, uint256 id) public view returns(uint256) {
-        if (userStakedFlex[_user][id].amountdeposited == 0) {
-            return userStakedFlex[_user][id].claimable;
-        }
-        uint256 apy = getFlexApy(userStakedFlex[_user][id].planid);
-        uint256 annualReward = (flexplans[userStakedFlex[_user][id].planid].perEVCPrice * apy) / 100;
-        uint256 perSecondReward = annualReward / (365 * 86400);
-        uint256 stakeSeconds = block.timestamp - userStakedFlex[_user][id].rewardtime;
-        uint256 reward = stakeSeconds * perSecondReward;
-        return reward;
-    }
-
-    function getFlexApy(uint256 planId) public view returns(uint256) {
+    function getFlexApr(uint256 planId) public view returns(uint256) {
         require(flexplans[planId].rewardBal > 0, "Invalid staking plan");
         uint256 perEVCShare;
         uint256 stakingBucket = flexplans[planId].rewardBal;
         uint256 currstakeCount = flexplans[planId].currCount == 0 ? 1 : flexplans[planId].currCount; //avoid divisible by 0 error
-        uint256 maxNFTShare = (currstakeCount * flexplans[planId].perEVCPrice * flexplans[planId].maxApyPer) / 100;
+        uint256 maxNFTShare = (currstakeCount * flexplans[planId].perEVCPrice * flexplans[planId].maxAprPer) / 100;
         if (maxNFTShare < stakingBucket)
             perEVCShare = maxNFTShare / currstakeCount;
         else perEVCShare = stakingBucket / currstakeCount;
         return (perEVCShare * 100) / flexplans[planId].perEVCPrice;
     }
 
-    function getStakedflexId(address _user) external view returns(uint[] memory) {
-        return stakedIdsFlex[_user];
-    }
-
-    function getFlexUnstakeBeforeTime(address _user) public view returns(uint[] memory) {
+    function getFlexUnstakeBeforeTime(address _user) public view returns(uint256[] memory) {
         return flexUnstakeBeforeTime[_user];
     }
 
-    function userFlexInfo(address _user, uint id) public view returns(uint _amountdeposited, uint _claimable, uint _nextclaimTime) {
+    function getRewardFlex(address _user, uint256 id) public view returns(uint256) {
+        if (userStakedFlex[_user][id].amountdeposited == 0) {
+            return userStakedFlex[_user][id].claimable;
+        }
+        uint256 apr = getFlexApr(userStakedFlex[_user][id].planid);
+        uint256 annualReward = (userStakedFlex[_user][id].amountdeposited * apr) / 100;
+        uint256 perSecondReward = annualReward / (365 * 86400);
+        uint256 stakeSeconds = block.timestamp - userStakedFlex[_user][id].rewardtime;
+        uint256 reward = stakeSeconds * perSecondReward;
+        return reward;
+    }
+
+    function getStakedflexId(address _user) external view returns(uint256[] memory) {
+        return stakedIdsFlex[_user];
+    }
+
+    function userFlexInfo(address _user, uint256 id) public view returns(uint256 _amountdeposited, uint256 _claimable, uint256 _nextclaimTime) {
         StakerFlex storage staker = userStakedFlex[_user][id];
         _amountdeposited = staker.amountdeposited;
         _claimable = getRewardFlex(_user, id);
@@ -308,47 +317,51 @@ contract EVC is Ownable, ERC20, ERC20Burnable, ReentrancyGuard {
         return (_amountdeposited, _claimable, _nextclaimTime);
     }
 
+    function getTotalStaked() public view returns(uint256){
+        return totalStaked;
+    }
+
     //Private
-    function popSlotflex(uint _id) private {
+    function popSlotflex(uint256 _id) private {
         address sender = msg.sender;
-        uint[] storage ids = stakedIdsFlex[sender];
-        uint lastIndex = ids.length - 1;
-        uint lastID = ids[lastIndex];
-        uint currentPos = userStakedFlex[sender][_id].index;
+        uint256[] storage ids = stakedIdsFlex[sender];
+        uint256 lastIndex = ids.length - 1;
+        uint256 lastID = ids[lastIndex];
+        uint256 currentPos = userStakedFlex[sender][_id].index;
         ids[currentPos] = lastID;
         userStakedFlex[sender][lastID].index = currentPos;
         ids.pop();
     }
 
-    function popSlotflexBeforeTime(uint _id) private {
+    function popSlotflexBeforeTime(uint256 _id) private {
         address sender = msg.sender;
-        uint[] storage ids = flexUnstakeBeforeTime[sender];
-        uint lastIndex = ids.length - 1;
-        uint lastID = ids[lastIndex];
-        uint currentPos = flexUnstakeBeforeTimeInfo[sender][_id].index;
+        uint256[] storage ids = flexUnstakeBeforeTime[sender];
+        uint256 lastIndex = ids.length - 1;
+        uint256 lastID = ids[lastIndex];
+        uint256 currentPos = flexUnstakeBeforeTimeInfo[sender][_id].index;
         ids[currentPos] = lastID;
         flexUnstakeBeforeTimeInfo[sender][lastID].index = currentPos;
         ids.pop();
     }
 
     //Admin
-    function setFlexStakePlan(uint256 id, uint256 _rewardBal, uint256 _maxApyPer, uint256 _perEVCPrice) external onlyOwner {
-        if (flexplans[id].maxApyPer == 0) {
+    function setClaimLockFlex(uint256 _claimLockFlex) public onlyOwner {
+        claimLockFlex = _claimLockFlex;
+    }
+
+    function setFlexStakePlan(uint256 id, uint256 _rewardBal, uint256 _maxAprPer, uint256 _perEVCPrice) external onlyOwner {
+        if (flexplans[id].maxAprPer == 0) {
             flexplanCount++;
         }
         flexPlan storage plan = flexplans[id];
         plan.planid = id;
         plan.rewardBal = _rewardBal;
-        plan.maxApyPer = _maxApyPer;
+        plan.maxAprPer = _maxAprPer;
         plan.perEVCPrice = _perEVCPrice;
     }
 
     function setMinStakeFlex(uint256 _minStakeFlex) public onlyOwner {
         minStakeFlex = _minStakeFlex;
-    }
-
-    function setClaimLockFlex(uint256 _claimLockFlex) public onlyOwner {
-        claimLockFlex = _claimLockFlex;
     }
 
 }
